@@ -1,10 +1,9 @@
-import { find, on } from '../utils/JqueryWrappers'
-import { getImageQueue, processDropAndPasteImages, removeAllFromQueue, SaveValueType } from '../processors/FileProcessor'
-import { isVeriosnAfter13, t } from '../utils/Utils'
-import { getUploadingStates } from './Loader'
+import {find, on} from '../utils/JqueryWrappers'
+import {ensureUploadedQueue, getImageQueue, processDropAndPasteImages, removeAllFromQueue, SaveValueType} from '../processors/FileProcessor'
+import {isVeriosnAfter13, t} from '../utils/Utils'
+import {getUploadingStates} from './Loader'
 
-let hookIsHandlingTheMessage = false
-let eventIsHandlingTheMessage = false
+let isSending = false
 
 const imageTemplate = (imageProps: SaveValueType): string => `<div class="ci-message-image"><img src="${imageProps.imageSrc}" alt="${imageProps.name || t('unableToLoadImage')}"></div>`
 
@@ -13,58 +12,14 @@ const messageTemplate = (imageQueue: SaveValueType[]) => {
   return `<div class="ci-message">${imageTemplates.join('')}</div>`
 }
 
-const preCreateChatMessageHandler = (sidebar: JQuery) => (chatMessage: any, userOptions: never, messageOptions: any) => {
-  if (eventIsHandlingTheMessage) return
-
-  hookIsHandlingTheMessage = true
-  const imageQueue: SaveValueType[] = getImageQueue()
-  if (!imageQueue.length) {
-    hookIsHandlingTheMessage = false
-    return
-  }
-
-  const uploadState = getUploadingStates(sidebar)
-  uploadState.on()
-
-  const content = `${messageTemplate(imageQueue)}<div class="ci-notes">${chatMessage.content}</div>`
-
-  chatMessage.content = content
-  chatMessage._source.content = content
-  messageOptions.chatBubble = false
-
-  removeAllFromQueue(sidebar)
-  hookIsHandlingTheMessage = false
-  uploadState.off()
+const getChatMessageType = () => {
+  const chatMessageType = isVeriosnAfter13() ?
+      CONST.CHAT_MESSAGE_STYLES.OOC :
+      CONST.CHAT_MESSAGE_TYPES.OOC
+  return typeof chatMessageType !== 'undefined' ? chatMessageType : 1
 }
 
-const emptyChatEventHandler = (sidebar: JQuery) => async (evt: KeyboardEvent) => {
-  if (hookIsHandlingTheMessage || (evt.code !== 'Enter' && evt.code !== 'NumpadEnter') || evt.shiftKey) return
-  eventIsHandlingTheMessage = true
-
-  const uploadState = getUploadingStates(sidebar)
-  const imageQueue: SaveValueType[] = getImageQueue()
-  if (!imageQueue.length) {
-    eventIsHandlingTheMessage = false
-    return
-  }
-  uploadState.on()
-
-  const chatMessageType = isVeriosnAfter13()
-    ? CONST.CHAT_MESSAGE_STYLES.OOC
-    : CONST.CHAT_MESSAGE_TYPES.OOC
-
-  const messageData = {
-    content: messageTemplate(imageQueue),
-    type: typeof chatMessageType !== 'undefined' ? chatMessageType : 1,
-    user: (game as Game).user,
-  }
-  await ChatMessage.create(messageData)
-  removeAllFromQueue(sidebar)
-  uploadState.off()
-  eventIsHandlingTheMessage = false
-}
-
-const pastAndDropEventHandler = (sidebar: JQuery) => (evt: any) => {
+const pasteAndDropEventHandler = (sidebar: JQuery) => (evt: any) => {
   const originalEvent: ClipboardEvent | DragEvent = evt.originalEvent
   const eventData: DataTransfer | null = (originalEvent as ClipboardEvent).clipboardData || (originalEvent as DragEvent).dataTransfer
   if (!eventData) return
@@ -72,16 +27,57 @@ const pastAndDropEventHandler = (sidebar: JQuery) => (evt: any) => {
   processDropAndPasteImages(eventData, sidebar)
 }
 
+const submitHandler = (sidebar: JQuery) => async (evt: any) => {
+  if (isSending) return
+
+  const imageQueue = getImageQueue()
+  if (!imageQueue.length) return // пусть Foundry отправляет обычное сообщение
+
+  // Мы отправляем сами
+  evt.preventDefault()
+  evt.stopPropagation()
+
+  isSending = true
+  const uploadState = getUploadingStates(sidebar)
+  uploadState.on()
+
+  try {
+    // дождаться загрузки всех File-элементов очереди
+    await ensureUploadedQueue(sidebar)
+
+    const input = find('#chat-message', sidebar) as any
+    const text: string = input?.val ? String(input.val() ?? '') : ''
+    const content = text ?
+        `${messageTemplate(imageQueue)}<div class="ci-notes">${text}</div>` :
+        messageTemplate(imageQueue)
+
+    await ChatMessage.create({
+      content,
+      type: getChatMessageType(),
+      user: (game as Game).user,
+    })
+
+    // очистить поле ввода
+    if (input?.val) input.val('')
+
+    removeAllFromQueue(sidebar)
+  } finally {
+    uploadState.off()
+    isSending = false
+  }
+}
+
 export const isUploadAreaRendered = (sidebar: JQuery): boolean => {
   const uploadArea = find('#ci-chat-upload-area', sidebar)
-  return !!uploadArea.length;
+  return !!uploadArea.length
 }
 
 export const initChatSidebar = (sidebar: JQuery) => {
-  Hooks.on('preCreateChatMessage', preCreateChatMessageHandler(sidebar))
+  // paste/drop
+  on(sidebar, 'paste drop', pasteAndDropEventHandler(sidebar))
 
-  // This should only run when there is nothing in the chat
-  on(sidebar, 'keyup', emptyChatEventHandler(sidebar))
-
-  on(sidebar, 'paste drop', pastAndDropEventHandler(sidebar))
+  // submit (кнопка/enter)
+  const chatFormQuery = isVeriosnAfter13() ? '.chat-form' : '#chat-form'
+  const chatForm = find(chatFormQuery, sidebar)
+  on(chatForm, 'submit', submitHandler(sidebar))
 }
