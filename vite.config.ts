@@ -1,7 +1,4 @@
-import {
-  name as moduleName,
-  production as isModuleInProductionMode
-} from "./package.json";
+import { name as moduleName } from "./package.json";
 import { resolve } from "path";
 import { normalizePath, defineConfig } from "vite";
 import { viteStaticCopy } from "vite-plugin-static-copy";
@@ -12,9 +9,9 @@ const everyWordToUpperCase = (sentence: string) =>
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   build: {
-    sourcemap: isModuleInProductionMode ? false : "inline",
+    sourcemap: mode === "development" ? "inline" : false,
     lib: {
       entry: normalizePath(resolve(__dirname, `src/${moduleName}.ts`)),
       name: everyWordToUpperCase(moduleName),
@@ -22,12 +19,12 @@ export default defineConfig({
       formats: ["es"]
     },
     rollupOptions: {
-      // @ts-ignore
       output: {
         assetFileNames(assetInfo) {
-          return assetInfo.name === "style.css"
-            ? `${moduleName}.css`
-            : assetInfo.name;
+          if (assetInfo.name === "style.css") {
+            return `${moduleName}.css`;
+          }
+          return assetInfo.name || "asset";
         }
       }
     }
@@ -46,4 +43,4 @@ export default defineConfig({
       ]
     })
   ]
-});
+}));

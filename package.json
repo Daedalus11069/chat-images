@@ -2,7 +2,6 @@
   "name": "chat-images",
   "version": "3.4",
   "type": "module",
-  "production": false,
   "scripts": {
     "build": "tsc && vite build -c vite.config.ts"
   },
